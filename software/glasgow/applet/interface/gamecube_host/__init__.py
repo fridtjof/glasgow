@@ -183,6 +183,7 @@ class GamecubeHostInterface:
         return await self._lower.read(n)
 
     async def stream(self, callback):
+        await asyncio.sleep(1)
         await self._lower.write([0xff])
         while True:
             await callback(*await self._lower.read(1))
