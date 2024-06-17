@@ -54,8 +54,8 @@ class GamecubeHostSubtarget(Elaboratable):
                     m.next = "POLL"
             with m.State("POLL"):
                 m.d.sync += position.eq(0)
-                m.next = "NEXT-BIT"
-            with m.State("NEXT-BIT"):
+                m.next = "SEND-NEXT-BIT"
+            with m.State("SEND-NEXT-BIT"):
                 # need to shut up after sending the stop bit
                 m.d.comb += self.data.oe.eq(position != poll_command.width + 2)
 
@@ -93,7 +93,7 @@ class GamecubeHostSubtarget(Elaboratable):
                     with m.Case(0):
                         m.d.comb += self.data.o.eq(1)
                         with m.If(usec_timer == 0):
-                            m.next = "NEXT-BIT"
+                            m.next = "SEND-NEXT-BIT"
             with m.State("SEND-1"):
                 m.d.comb += self.data.oe.eq(1)
 
@@ -105,7 +105,7 @@ class GamecubeHostSubtarget(Elaboratable):
                     with m.Case(0):
                         m.d.comb += self.data.o.eq(1)
                         with m.If(usec_timer == 0):
-                            m.next = "NEXT-BIT"
+                            m.next = "SEND-NEXT-BIT"
             with m.State("SEND-STOP"):
                 m.d.comb += self.data.oe.eq(1)
 
@@ -119,7 +119,7 @@ class GamecubeHostSubtarget(Elaboratable):
                         # stop bit is 3 us long, so exit early
                         with m.If(usec_timer == 0):
                             m.d.sync += countdown.eq(countdown + 1)  # "skip" the 4th bit in this case
-                            m.next = "NEXT-BIT"
+                            m.next = "SEND-NEXT-BIT"
             with m.State("WAIT-FOR-CONTROLLER"):
                 with m.If(data_in == 0):
                     m.next = "READ-BIT"
