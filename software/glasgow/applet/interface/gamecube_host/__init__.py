@@ -194,15 +194,7 @@ class GamecubeHostApplet(GlasgowApplet):
     help = "interface with Gamecube controllers"
     preview = True
     description = """
-    An example of the boilerplate code required to implement a minimal Glasgow applet.
-
-    The only things necessary for an applet are:
-        * a subtarget class,
-        * an applet class,
-        * the `build` and `run` methods of the applet class.
-
-    Everything else can be omitted and would be replaced by a placeholder implementation that does
-    nothing. Similarly, there is no requirement to use IN or OUT FIFOs, or any pins at all.
+    gamecube
     """
 
     __pins = ("data", "bit")
