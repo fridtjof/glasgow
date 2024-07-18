@@ -19,7 +19,6 @@ class GamecubeHostAppletTestCase(GlasgowAppletTestCase, applet=GamecubeHostApple
         iface = await self.run_simulated_applet()
         await iface.write(bytes([0xFF]))
         # poll runs now
-        #self.assertEqual(True, False)
         respo = await iface.read(1)
         pprint(respo)
         #self.assertNotEqual(respo, bytes([0, 0, 0, 0, 0, 0, 0, 0]))

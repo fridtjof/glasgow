@@ -9,7 +9,6 @@ from ... import *
 class GamecubeHostSubtarget(Elaboratable):
     def __init__(self, ports, in_fifo, out_fifo, joybus_cyc):
         self.ports = ports
-        self.data = self.ports.data
         self.in_fifo = in_fifo
         self.out_fifo = out_fifo
         self.joybus_cyc = joybus_cyc
@@ -21,16 +20,19 @@ class GamecubeHostSubtarget(Elaboratable):
         #m.submodules += cdc.FFSynchronizer(self.data.i, data_in, init=1)
 
         m.submodules.data = data = io.Buffer(io.Direction.Bidir, self.ports.data)
+        m.submodules.bit = p_bit = io.Buffer(io.Direction.Output, self.ports.bit)
+        m.submodules.dbgval = p_dbgval = io.Buffer(io.Direction.Output, self.ports.dbgval)
 
         data_in = data.i
 
         # poll_command = Const(0b0100_0000_0000_0011_0000_0010)
-        poll_command = Const(0x400302)  # same but bytes
-        cmd_shortpoll = Const(0x40)
-        cmd_readorigin = Const(0x41)
         # poll_command = cmd_shortpoll
 
-        position = Signal(range(poll_command.width + 2))  # plus stop bit plus one extra state for moving on :)
+        cmdbufwidth = 8
+        cmd_buf = Signal(cmdbufwidth * 8)
+        cmd_buf_r_pos = Signal(range(cmdbufwidth))
+
+        position = Signal(range(cmd_buf.width + 1))  # plus stop bit plus one extra state for moving on :)
         # maybe have a flag but no
 
         usec_timer = Signal(range(self.joybus_cyc))
@@ -38,51 +40,76 @@ class GamecubeHostSubtarget(Elaboratable):
 
         #usec_tick = Signal(32)
         #with m.If(usec_timer == 0):
-        #    m.d.sync += usec_tick.eq(usec_tick + 1)
-        # usec_clock = Signal(1)
-        # m.d.comb += usec_clock.eq(usec_timer == 0)
+            #m.d.sync += usec_tick.eq(usec_tick + 1)
+            # usec_clock = Signal(1)
+            # m.d.comb += usec_clock.eq(usec_timer == 0)
 
         countdown = Signal(range(4))
+        countdown_en = Signal(1)
+        m.d.comb += [
+            p_dbgval.oe.eq(1),
+            p_dbgval.o.eq(countdown)
+        ]
 
         response = Signal(64)
         response_pos = Signal(range(response.width + 1))
 
-        BIT_ONE         = Const(0b0111)
-        BIT_ZERO        = Const(0b0001)
-        CONSOLE_STOP    = Const(0b011)
-        DEVICE_STOP     = Const(0b0011)
+
+        BIT_ONE         = Const(0b0111, 4)
+        BIT_ZERO        = Const(0b0001, 4)
+        CONSOLE_STOP    = Const(0b011, 3)
+        DEVICE_STOP     = Const(0b0011, 4)
 
         with m.If(usec_timer == 0):
-            m.d.sync += countdown.eq(countdown - 1)
+            with m.If(countdown_en):
+                m.d.sync += countdown.eq(countdown - 1)
             m.d.sync += usec_timer.eq(self.joybus_cyc)
 
         with m.FSM():
-            with m.State("IDLE"):
-                m.d.comb += self.out_fifo.r_en.eq(1)
-                with m.If(self.out_fifo.r_rdy):
+            with m.State("READ"):
+                with m.If(self.out_fifo.r_rdy & (cmd_buf_r_pos < 7)):
+                    m.d.comb += self.out_fifo.r_en.eq(1)
+                    m.d.sync += [
+                        cmd_buf.word_select(cmd_buf_r_pos, 8).eq(self.out_fifo.r_data),
+                        cmd_buf_r_pos.eq(cmd_buf_r_pos + 1),
+                    ]
+                with m.Elif(cmd_buf_r_pos == (cmdbufwidth - 1)):
+                    # buffer full
+                    m.next = "POLL"
+                with m.Elif((~self.out_fifo.r_rdy) & (cmd_buf_r_pos > 0)):
+                    # done reading (~r_rdy)
                     m.next = "POLL"
             with m.State("POLL"):
                 m.d.sync += position.eq(0)
                 m.next = "SEND-NEXT-BIT"
             with m.State("SEND-NEXT-BIT"):
-                # need to shut up after sending the stop bit
-                m.d.comb += data.oe.eq(position != poll_command.width + 2)
+                # todo restructure into byte/bit counting
+                m.d.comb += data.oe.eq(1)
 
                 m.d.sync += usec_timer.eq(self.joybus_cyc)  # reset timer
                 m.d.sync += countdown.eq(3)  # reset countdown
 
-                with m.If(position <= poll_command.width):
-                    bit = poll_command.bit_select((poll_command.width - position).as_unsigned(), 1)
+                cmd_size_bits = Signal(range(cmdbufwidth * 8))
+                m.d.comb += cmd_size_bits.eq(cmd_buf_r_pos * 8)
+                cmd_size_bytes = cmd_buf_r_pos
+
+                with m.If(position < cmd_size_bits):
+                    max_pos = cmd_size_bits - 1
+                    max_pos_bytes = cmd_size_bytes - 1
+                    bytebits_pos = (max_pos_bytes - (position // 8)) * 8 + (position % 8)
+                    pos = (max_pos - bytebits_pos)
+                    bit = cmd_buf.bit_select(pos.as_unsigned(), 1)
                     m.d.sync += position.eq(position + 1)
 
                     with m.If(bit == 0):
                         m.next = "SEND-0"
                     with m.Elif(bit == 1):
                         m.next = "SEND-1"
-                with m.Elif(position == poll_command.width + 1):  # need to send a stop bit at the end
+                with m.Elif(position == cmd_size_bits):  # need to send a stop bit at the end
                     m.d.sync += position.eq(position + 1)
                     m.next = "SEND-STOP"
-                with m.Elif(position == poll_command.width + 2):
+                with m.Elif(position == cmd_size_bits + 1):
+                    m.d.comb += data.oe.eq(0)  # shut up immediately
                     m.d.sync += usec_timer.eq(self.joybus_cyc)  # reset timer
                     m.d.sync += countdown.eq(3)  # reset countdown
 
@@ -95,26 +122,23 @@ class GamecubeHostSubtarget(Elaboratable):
                     m.next = "WAIT-FOR-CONTROLLER"
             with m.State("SEND-0"):
                 m.d.comb += data.oe.eq(1)
+                m.d.comb += countdown_en.eq(1)
+                m.d.comb += data.o.eq(BIT_ZERO.bit_select(countdown, 1))
 
-                cd0 = Signal(BIT_ZERO.width)
-                m.d.sync += cd0.eq(cd0 - 1)
-                m.d.comb += data.o.eq(BIT_ZERO.bit_select(cd0, 1))
-
-                with m.If((cd0 == 0) & (usec_timer == 0)):
+                with m.If((countdown == 0) & (usec_timer == 0)):
                     m.next = "SEND-NEXT-BIT"
             with m.State("SEND-1"):
                 m.d.comb += data.oe.eq(1)
+                m.d.comb += countdown_en.eq(1)
+                m.d.comb += data.o.eq(BIT_ONE.bit_select(countdown, 1))
 
-                with m.Switch(countdown):
-                    with m.Case(3):
-                        m.d.comb += data.o.eq(0)
-                    with m.Case(1, 2):
-                        m.d.comb += data.o.eq(1)
-                    with m.Case(0):
-                        m.d.comb += data.o.eq(1)
-                        with m.If(usec_timer == 0):
-                            m.next = "SEND-NEXT-BIT"
+                with m.If((countdown == 0) & (usec_timer == 0)):
+                    m.next = "SEND-NEXT-BIT"
             with m.State("SEND-STOP"):
+                m.d.comb += countdown_en.eq(1)
+                m.d.comb += p_bit.oe.eq(1)
+                m.d.comb += p_bit.o.eq(1)
+
                 m.d.comb += data.oe.eq(1)
 
                 with m.Switch(countdown):
@@ -126,7 +150,7 @@ class GamecubeHostSubtarget(Elaboratable):
                         m.d.comb += data.o.eq(1)
                         # stop bit is 3 us long, so exit early
                         with m.If(usec_timer == 0):
-                            m.d.sync += countdown.eq(countdown + 1)  # "skip" the 4th bit in this case
+                            m.d.sync += countdown.eq(countdown - 2)  # "skip" the 4th bit in this case
                             m.next = "SEND-NEXT-BIT"
             with m.State("WAIT-FOR-CONTROLLER"):
                 with m.If(data_in == 0):
@@ -170,7 +194,8 @@ class GamecubeHostSubtarget(Elaboratable):
                     self.in_fifo.w_data.eq(response.bit_select(counter * 8, 8))
                 ]
                 with m.If(counter == 7):
-                    m.next = "IDLE"
+                    m.d.sync += cmd_buf_r_pos.eq(0)
+                    m.next = "READ"
         return m
 
 
@@ -191,10 +216,18 @@ class GamecubeHostInterface:
         return await self._lower.read(n)
 
     async def stream(self, callback):
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)
+        print("amogus")
         while True:
-            await self.write([0xff])
-            await callback(*await self.read(8))
+            await self.write([0x40, 0x03, 0x02])  # shortpoll + 2 bytes params(??)
+
+            #cmd_shortpoll = Const(0x40)
+            #cmd_readorigin = Const(0x41)
+
+
+            await callback(await self.read(1))  # 0xff "confirmation byte" (can be removed once stuff works)
+
+            await callback(await self.read(8))
 
 
 class GamecubeHostApplet(GlasgowApplet):
@@ -211,6 +244,8 @@ class GamecubeHostApplet(GlasgowApplet):
 
         access.add_pin_argument(parser, "data", default=True)
         access.add_pin_argument(parser, "bit", default=True)
+        access.add_pin_set_argument(parser, "dbgval", 4, default=True)
+
 
     def build(self, target, args):
         self.mux_interface = iface = target.multiplexer.claim_interface(self, args)
@@ -221,6 +256,7 @@ class GamecubeHostApplet(GlasgowApplet):
             ports=iface.get_port_group(
                 data=args.pin_data,
                 bit=args.pin_bit,
+                dbgval=args.pin_set_dbgval,
             ),
             in_fifo=iface.get_in_fifo(),
             out_fifo=iface.get_out_fifo(),
@@ -254,7 +290,9 @@ class GamecubeHostApplet(GlasgowApplet):
 
     async def interact(self, device, args, iface):
         async def print_gc_state(gc_packet):
-            print(f"{gc_packet:02x}", end=" ", flush=True)
+            for byt in gc_packet:
+                print(f"{byt:02x}", end=" ", flush=True)
+            print()
 
         await iface.stream(print_gc_state)
 
