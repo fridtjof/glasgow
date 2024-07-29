@@ -118,16 +118,20 @@ class GamecubeHostSubtarget(Elaboratable):
                     m.next = "SEND-STOP"
 
             with m.State("SEND-0"):
-                m.d.comb += data.oe.eq(1)
                 m.d.comb += countdown_en.eq(1)
-                m.d.comb += data.o.eq(BIT_ZERO.bit_select(countdown, 1))
+                m.d.comb += [
+                    data.oe.eq(1),
+                    data.o.eq(BIT_ZERO.bit_select(countdown, 1))
+                ]
 
                 with m.If((countdown == 0) & (usec_timer == 0)):
                     m.next = "SEND-NEXT-BIT"
             with m.State("SEND-1"):
-                m.d.comb += data.oe.eq(1)
                 m.d.comb += countdown_en.eq(1)
-                m.d.comb += data.o.eq(BIT_ONE.bit_select(countdown, 1))
+                m.d.comb += [
+                    data.oe.eq(1),
+                    data.o.eq(BIT_ONE.bit_select(countdown, 1))
+                ]
 
                 with m.If((countdown == 0) & (usec_timer == 0)):
                     m.next = "SEND-NEXT-BIT"
@@ -151,8 +155,6 @@ class GamecubeHostSubtarget(Elaboratable):
                 m.d.sync += usec_timer.eq(self.joybus_cyc)  # reset timer
                 m.d.sync += countdown.eq(3)  # reset countdown
                 m.d.sync += position.eq(0)  # reset position
-
-                # m.d.comb += self.data.w_data.eq(1)  # keep the output high
 
                 m.d.comb += [
                     self.in_fifo.w_en.eq(1),
@@ -183,12 +185,7 @@ class GamecubeHostSubtarget(Elaboratable):
                     m.d.sync += read_timer.eq(0)  # reset the timer before leaving
                     m.d.sync += saw_rising_edge.eq(0)
 
-
-                    with m.If(response_pos < 64):  # 64 bits + 1 stop bit
-                        m.d.comb += [
-                            p_bit.oe.eq(1),
-                            p_bit.o.eq(1)
-                        ]
+                    with m.If(response_pos < 64):
                         m.next = "READ-BIT"
                     with m.Else():
                         m.next = "YEET-BYTES"
@@ -199,7 +196,7 @@ class GamecubeHostSubtarget(Elaboratable):
 
                 m.d.comb += [
                     self.in_fifo.w_en.eq(1),
-                    self.in_fifo.w_data.eq(response.bit_select(counter * 8, 8))
+                    self.in_fifo.w_data.eq(response.word_select(counter, 8))
                 ]
                 with m.If(counter == 7):
                     m.d.sync += cmd_size_bytes.eq(0)
@@ -239,7 +236,6 @@ class GamecubeHostInterface:
 
         #cmd_shortpoll = Const(0x40)
         #cmd_readorigin = Const(0x41)
-
 
         await callback(await self.read(1))  # 0xff "confirmation byte" (can be removed once stuff works)
 
