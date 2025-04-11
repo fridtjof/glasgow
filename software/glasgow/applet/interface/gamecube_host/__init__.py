@@ -185,20 +185,21 @@ class GamecubeHostSubtarget(Elaboratable):
                     m.d.sync += read_timer.eq(0)  # reset the timer before leaving
                     m.d.sync += saw_rising_edge.eq(0)
 
-                    with m.If(response_pos < 64):
+                    with m.If(response_pos < (3 * 8)):
                         m.next = "READ-BIT"
                     with m.Else():
                         m.next = "YEET-BYTES"
                     # todo rely on controller stop bit, and do this one byte at a time.
             with m.State("YEET-BYTES"):
-                counter = Signal(range(8))
+                BYTES_COUNT = 3
+                counter = Signal(range(BYTES_COUNT))
                 m.d.sync += counter.eq(counter + 1)
 
                 m.d.comb += [
                     self.in_fifo.w_en.eq(1),
                     self.in_fifo.w_data.eq(response.word_select(counter, 8))
                 ]
-                with m.If(counter == 7):
+                with m.If(counter == (BYTES_COUNT - 1)):
                     m.d.sync += cmd_size_bytes.eq(0)
                     m.next = "READ"
 
@@ -227,7 +228,7 @@ class GamecubeHostInterface:
         return await self._lower.read(n)
 
     async def stream(self, callback):
-        await asyncio.sleep(3)
+        await asyncio.sleep(1)
         print("amogus")
         #while True:
         #await self.write([0x40, 0x03, 0x02])  # shortpoll + 2 bytes params(??)
@@ -239,7 +240,7 @@ class GamecubeHostInterface:
 
         await callback(await self.read(1))  # 0xff "confirmation byte" (can be removed once stuff works)
 
-        await callback(await self.read(8))
+        await callback(await self.read(3))
 
 
 class GamecubeHostApplet(GlasgowApplet):
